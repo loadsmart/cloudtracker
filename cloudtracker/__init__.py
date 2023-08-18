@@ -24,6 +24,7 @@ USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 """
 __version__ = "2.1.5"
 
+from datetime import date, datetime
 import json
 import logging
 import pkg_resources
@@ -208,7 +209,8 @@ def print_actor_diff(performed_actors, allowed_actors, use_color):
 def get_user_iam(username, account_iam):
     """Given the IAM of an account, and a username, return the IAM data for the user"""
     user_iam = jmespath.search(
-        "UserDetailList[] | [?UserName == `{}`] | [0]".format(username), account_iam
+        "UserDetailList[] | [?UserName == `{}`] | [0]".format(
+            username), account_iam
     )
     if user_iam is None:
         exit("ERROR: Unknown user named {}".format(username))
@@ -218,7 +220,8 @@ def get_user_iam(username, account_iam):
 def get_role_iam(rolename, account_iam):
     """Given the IAM of an account, and a role name, return the IAM data for the role"""
     role_iam = jmespath.search(
-        "RoleDetailList[] | [?RoleName == `{}`] | [0]".format(rolename), account_iam
+        "RoleDetailList[] | [?RoleName == `{}`] | [0]".format(
+            rolename), account_iam
     )
     if role_iam is None:
         raise Exception("Unknown role named {}".format(rolename))
@@ -235,7 +238,8 @@ def get_user_allowed_actions(aws_api_list, user_iam, account_iam):
     # Get permissions from groups
     for group in groups:
         group_iam = jmespath.search(
-            "GroupDetailList[] | [?GroupName == `{}`] | [0]".format(group), account_iam
+            "GroupDetailList[] | [?GroupName == `{}`] | [0]".format(
+                group), account_iam
         )
         if group_iam is None:
             continue
@@ -269,7 +273,8 @@ def get_user_allowed_actions(aws_api_list, user_iam, account_iam):
 
     # Get privileges from inline policies attached to the user
     for stmt in (
-        jmespath.search("UserPolicyList[].PolicyDocument.Statement", user_iam) or []
+        jmespath.search(
+            "UserPolicyList[].PolicyDocument.Statement", user_iam) or []
     ):
         privileges.add_stmt(stmt)
 
@@ -378,6 +383,76 @@ def print_diff(performed_actions, allowed_actions, printfilter, use_color):
             raise Exception("Unknown constant")
 
 
+def return_diff_dict(performed_actions, allowed_actions, printfilter, use_color):
+    """
+    For an actor, given the actions they performed, and the privileges they were granted,
+    print what they were allowed to do but did not, and other differences.
+    """
+    PERFORMED_AND_ALLOWED = 1
+    PERFORMED_BUT_NOT_ALLOWED = 2
+    ALLOWED_BUT_NOT_PERFORMED = 3
+    ALLOWED_BUT_NOT_KNOWN_IF_PERFORMED = 4
+
+    actions = {}
+    diff_dict = {
+        'to_remove': [],
+        'to_add': [],
+        'to_keep': []
+    }
+    for action in performed_actions:
+        # Convert to IAM names
+        for iam_name, cloudtrail_name in EVENT_RENAMES.items():
+            if action == cloudtrail_name:
+                action = iam_name
+
+        # See if this was allowed or not
+        if action in allowed_actions:
+            actions[action] = PERFORMED_AND_ALLOWED
+        else:
+            if action in NO_IAM:
+                # Ignore actions in cloudtrail such as sts:getcalleridentity that are allowed
+                # whether or not they are in IAM
+                continue
+            actions[action] = PERFORMED_BUT_NOT_ALLOWED
+
+    # Find actions that were allowed, but there is no record of them being used
+    for action in allowed_actions:
+        if action not in actions:
+            if not is_recorded_by_cloudtrail(action):
+                actions[action] = ALLOWED_BUT_NOT_KNOWN_IF_PERFORMED
+            else:
+                actions[action] = ALLOWED_BUT_NOT_PERFORMED
+
+    for action in sorted(actions.keys()):
+        # Convert CloudTrail name back to IAM name
+        display_name = action
+
+        if not printfilter.get("show_benign", True):
+            # Ignore actions that won't exfil or modify resources
+            if ":list" in display_name or ":describe" in display_name:
+                continue
+
+        if actions[action] == PERFORMED_AND_ALLOWED:
+            diff_dict['to_keep'].append(display_name)
+        elif actions[action] == PERFORMED_BUT_NOT_ALLOWED:
+            diff_dict['to_add'].append(display_name)
+        elif actions[action] == ALLOWED_BUT_NOT_PERFORMED:
+            if printfilter.get("show_used", True):
+                # Ignore this as it wasn't used
+                continue
+            diff_dict['to_remove'].append(display_name)
+        elif actions[action] == ALLOWED_BUT_NOT_KNOWN_IF_PERFORMED:
+            if printfilter.get("show_used", True):
+                # Ignore this as it wasn't used
+                continue
+            if printfilter.get("show_unknown", True):
+                colored_print("? {}".format(display_name), use_color, "yellow")
+        else:
+            raise Exception("Unknown constant")
+
+    return diff_dict
+
+
 def get_account(accounts, account_name):
     """
     Gets the account struct from the config file, for the account name specified
@@ -397,7 +472,8 @@ def get_account(accounts, account_name):
 
             # Sanity check account ID
             if not re.search("[0-9]{12}", str(account["id"])):
-                exit("ERROR: {} is not a 12-digit account id".format(account["id"]))
+                exit(
+                    "ERROR: {} is not a 12-digit account id".format(account["id"]))
 
             return account
     exit("ERROR: Account name {} not found in config".format(account_name))
@@ -416,6 +492,13 @@ def read_aws_api_list(aws_api_list_file="aws_api_list.txt"):
         service, event = line.rstrip().split(":")
         aws_api_list[normalize_api_call(service, event)] = True
     return aws_api_list
+
+
+def get_item_by_index(array, index):
+    try:
+        return array[index]
+    except IndexError:
+        return ""
 
 
 def run(args, config, start, end):
@@ -475,7 +558,8 @@ def run(args, config, start, end):
 
     else:
         if args.destaccount:
-            destination_account = get_account(config["accounts"], args.destaccount)
+            destination_account = get_account(
+                config["accounts"], args.destaccount)
         else:
             destination_account = account
 
@@ -541,3 +625,37 @@ def run(args, config, start, end):
         printfilter["show_used"] = args.show_used
 
         print_diff(performed_actions, allowed_actions, printfilter, use_color)
+        diff_dict = return_diff_dict(
+            performed_actions, allowed_actions, printfilter, use_color)
+
+        lists_size = [len(diff_dict['to_remove']), len(
+            diff_dict['to_add']), len(diff_dict['to_keep'])]
+        lists_size = max(lists_size)
+        table_itens = ""
+        for index in range(0, lists_size):
+            table_itens += "<tr>\
+                                <td style=\"width:223px\">{}</td>\
+                                <td style=\"width:237px\">{}</td>\
+                                <td style=\"width:233px\">{}</td>\
+                            </tr>".format(get_item_by_index(diff_dict['to_remove'], index), get_item_by_index(diff_dict['to_add'], index), get_item_by_index(diff_dict['to_keep'], index))
+
+        html = "<p>Report date: {}</p>\
+                <p>Start date: {}</p>\
+                <p>Cloudtracker report for {} role</p>\
+                <table border=\"1\" cellpadding=\"1\" cellspacing=\"1\" style=\"width:711px\">\
+                <thead>\
+                    <tr>\
+                        <th scope=\"col\" style=\"width: 223px;\">Permission not used but allowed</th>\
+                        <th scope=\"col\" style=\"width: 237px;\">Permission used but not allowed</th>\
+                        <th scope=\"col\" style=\"width: 233px;\">Permissions used and allowed</th>\
+                    </tr>\
+                </thead>\
+                <tbody>\
+                    {} \
+                </tbody>\
+            </table>".format(datetime.now(), start, args.role, table_itens)
+
+        text_file = open("report {} {}.html".format(
+            args.role, datetime.now()), "w")
+        text_file.write(html)
+        text_file.close()

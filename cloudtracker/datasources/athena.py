@@ -62,15 +62,13 @@ class Athena(object):
         if context is None:
             response = self.athena.start_query_execution(
                 QueryString=query,
-                ResultConfiguration={"OutputLocation": self.output_bucket},
-                WorkGroup=self.workgroup
+                ResultConfiguration={"OutputLocation": self.output_bucket}
             )
         else:
             response = self.athena.start_query_execution(
                 QueryString=query,
                 QueryExecutionContext=context,
-                ResultConfiguration={"OutputLocation": self.output_bucket},
-                WorkGroup=self.workgroup
+                ResultConfiguration={"OutputLocation": self.output_bucket}
             )
 
         if do_not_wait:
@@ -429,12 +427,12 @@ class Athena(object):
             # Split into 'field0=s3.amazonaws.com' and 'field1=GetBucketAcl'
             event = event.split(", ")
             # Get the eventsource 's3.amazonaws.com'
-            service = event[0].split("=")[1]
+            service = event[0]
             # Get the service 's3'
             service = service.split(".")[0]
 
             # Get the eventname 'GetBucketAcl'
-            eventname = event[1].split("=")[1]
+            eventname = event[1]
 
             event_names[normalize_api_call(service, eventname)] = True
 
