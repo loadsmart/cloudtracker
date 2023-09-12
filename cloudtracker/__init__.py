@@ -655,7 +655,7 @@ def run(args, config, start, end):
                 </tbody>\
             </table>".format(datetime.now(), start, args.role, table_itens)
 
-        text_file = open("report {} {}.html".format(
-            args.role, datetime.now()), "w")
+        text_file = open("report_{}_{}.html".format(
+            args.role, datetime.now().strftime("%Y_%m_%d_%H_%M_%S"), "w"))
         text_file.write(html)
         text_file.close()
